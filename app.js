@@ -97,10 +97,168 @@ const rollDiceBtn = document.getElementById("rollDiceBtn");
 const endMovementBtn = document.getElementById("endMovementBtn");
 const endActionBtn = document.getElementById("endActionBtn");
 const newGameBtn = document.getElementById("newGameBtn");
+const saveGameBtn = document.getElementById("saveGameBtn");
+const loadGameBtn = document.getElementById("loadGameBtn");
 const winner = document.getElementById("winner");
+
+// Save game state to local storage
+function saveGameState() {
+  console.log("Attempting to save game state...");
+  try {
+    const gameData = {
+      currentPhase: gameState.currentPhase,
+      currentTurn: gameState.currentTurn,
+      selectedCell: gameState.selectedCell,
+      selectedUnit: gameState.selectedUnit,
+      player1: {
+        clan: gameState.player1.clan,
+        units: gameState.player1.units,
+      },
+      player2: {
+        clan: gameState.player2.clan,
+        units: gameState.player2.units,
+      },
+      board: gameState.board,
+      moveExecuted: gameState.moveExecuted,
+      actionExecuted: gameState.actionExecuted,
+    };
+
+    console.log("Game data to save:", gameData);
+    localStorage.setItem("warOfClansGame", JSON.stringify(gameData));
+    console.log("Game saved successfully to localStorage");
+    alert("Game saved successfully!");
+  } catch (error) {
+    console.error("Error saving game:", error);
+    alert("Failed to save game. Please try again.");
+  }
+}
+
+// Load game state from local storage
+function loadGameState() {
+  console.log("Attempting to load game state...");
+  try {
+    const savedGame = localStorage.getItem("warOfClansGame");
+    console.log("Retrieved from localStorage:", savedGame);
+
+    if (!savedGame) {
+      console.log("No saved game found in localStorage");
+      alert("No saved game found!");
+      return false;
+    }
+
+    const gameData = JSON.parse(savedGame);
+    console.log("Parsed game data:", gameData);
+
+    // --- MIGRATION/COMPATIBILITY FIXES ---
+    // Migrate old phase names
+    if (gameData.currentPhase === "unitPlacement") {
+      gameData.currentPhase = "placement";
+    }
+    // If phase is missing or invalid, default to setup
+    const validPhases = [
+      "setup",
+      "placement",
+      "rollForTurn",
+      "movement",
+      "action",
+      "gameOver",
+    ];
+    if (
+      !gameData.currentPhase ||
+      !validPhases.includes(gameData.currentPhase)
+    ) {
+      gameData.currentPhase = "setup";
+    }
+    // Ensure all required properties exist
+    if (!gameData.player1) gameData.player1 = { clan: null, units: [] };
+    if (!gameData.player2) gameData.player2 = { clan: null, units: [] };
+    if (!gameData.board) gameData.board = [];
+    if (typeof gameData.currentTurn !== "number") gameData.currentTurn = 1;
+    if (!Array.isArray(gameData.player1.units)) gameData.player1.units = [];
+    if (!Array.isArray(gameData.player2.units)) gameData.player2.units = [];
+
+    // Restore game state
+    Object.assign(gameState, gameData);
+    console.log("Game state restored:", gameState);
+
+    // Update UI
+    updateGameInfo();
+    renderBoard();
+
+    // Show appropriate screen based on game phase
+    if (gameState.currentPhase === "gameOver") {
+      gameOver.style.display = "block";
+      gameBoardContainer.style.display = "none";
+      gameSetup.style.display = "none";
+    } else if (gameState.currentPhase === "setup") {
+      gameSetup.style.display = "block";
+      gameBoardContainer.style.display = "none";
+      gameOver.style.display = "none";
+    } else {
+      gameSetup.style.display = "none";
+      gameBoardContainer.style.display = "block";
+      gameOver.style.display = "none";
+    }
+
+    // Update clan displays
+    if (gameState.player1.clan) {
+      player1Clan.textContent = `Clan: ${
+        clanTypes[gameState.player1.clan].name
+      }`;
+    }
+    if (gameState.player2.clan) {
+      player2Clan.textContent = `Clan: ${
+        clanTypes[gameState.player2.clan].name
+      }`;
+    }
+
+    // Update unit counts
+    updateUnitCounts();
+
+    // Set up event listeners
+    setupEventListeners();
+
+    console.log("Game loaded successfully");
+    alert("Game loaded successfully!");
+    return true;
+  } catch (error) {
+    console.error("Error loading game:", error);
+    alert("Failed to load game. The save file may be corrupted.");
+    return false;
+  }
+}
 
 // Initialize game
 function initGame() {
+  console.log("Initializing game...");
+
+  // Check for saved game and prompt user
+  const savedGame = localStorage.getItem("warOfClansGame");
+  if (savedGame) {
+    const loadSaved = confirm(
+      "A saved game was found. Would you like to load it? (Press Cancel to start a new game)"
+    );
+    if (loadSaved) {
+      loadGameState();
+      return;
+    } else {
+      // User chose to start a new game: clear localStorage and reset state
+      localStorage.removeItem("warOfClansGame");
+      startNewGame();
+      return;
+    }
+  }
+
+  console.log("Starting new game");
+  startNewGame();
+}
+
+// Start a completely new game
+function startNewGame() {
+  // Clear any existing saved game
+  localStorage.removeItem("warOfClansGame");
+  console.log("Cleared saved game from localStorage");
+
   // Reset game state
   gameState.currentPhase = "setup";
   gameState.currentTurn = 1;
@@ -134,6 +292,9 @@ function initGame() {
   document.querySelectorAll(".select-btn").forEach((button) => {
     button.addEventListener("click", selectClan);
   });
+
+  // Update save/load button states
+  updateSaveLoadButtons();
 }
 
 // Function to select clan
@@ -164,7 +325,8 @@ function selectClan(event) {
 
 // Start the game after clan selection
 function startGame() {
-  gameState.currentPhase = "unitPlacement";
+  // Set phase to placement
+  gameState.currentPhase = "placement";
   gameSetup.style.display = "none";
   gameBoardContainer.style.display = "block";
 
@@ -180,7 +342,8 @@ function startGame() {
   // Set up event listeners
   setupEventListeners();
 
-  // Start with placement phase
+  // Start placement phase for Player 1
+  gameState.currentTurn = 1;
   startPlacementPhase();
 }
 
@@ -270,15 +433,47 @@ function createUnits() {
 
 // Update unit counts display
 function updateUnitCounts() {
-  const p1ActiveUnits = gameState.player1.units.filter(
-    (unit) => unit.status === "active"
+  // Count Player 1's active units by type
+  const p1Warriors = gameState.player1.units.filter(
+    (unit) => unit.type === "warrior" && unit.status === "active"
   ).length;
-  const p2ActiveUnits = gameState.player2.units.filter(
-    (unit) => unit.status === "active"
+  const p1Archers = gameState.player1.units.filter(
+    (unit) => unit.type === "archer" && unit.status === "active"
+  ).length;
+  const p1Mages = gameState.player1.units.filter(
+    (unit) => unit.type === "mage" && unit.status === "active"
   ).length;
 
-  player1Units.textContent = `Units: ${p1ActiveUnits}`;
-  player2Units.textContent = `Units: ${p2ActiveUnits}`;
+  // Count Player 2's active units by type
+  const p2Warriors = gameState.player2.units.filter(
+    (unit) => unit.type === "warrior" && unit.status === "active"
+  ).length;
+  const p2Archers = gameState.player2.units.filter(
+    (unit) => unit.type === "archer" && unit.status === "active"
+  ).length;
+  const p2Mages = gameState.player2.units.filter(
+    (unit) => unit.type === "mage" && unit.status === "active"
+  ).length;
+
+  // Update Player 1's unit display (sidebar counters)
+  const p1WarriorsElem = document.getElementById("p1Warriors");
+  const p1ArchersElem = document.getElementById("p1Archers");
+  const p1MagesElem = document.getElementById("p1Mages");
+  if (p1WarriorsElem) p1WarriorsElem.textContent = p1Warriors;
+  if (p1ArchersElem) p1ArchersElem.textContent = p1Archers;
+  if (p1MagesElem) p1MagesElem.textContent = p1Mages;
+
+  // Update Player 2's unit display (sidebar counters)
+  const p2WarriorsElem = document.getElementById("p2Warriors");
+  const p2ArchersElem = document.getElementById("p2Archers");
+  const p2MagesElem = document.getElementById("p2Mages");
+  if (p2WarriorsElem) p2WarriorsElem.textContent = p2Warriors;
+  if (p2ArchersElem) p2ArchersElem.textContent = p2Archers;
+  if (p2MagesElem) p2MagesElem.textContent = p2Mages;
+
+  // Optionally, keep the old summary for other UI parts
+  player1Units.textContent = `Units: ${p1Warriors + p1Archers + p1Mages}`;
+  player2Units.textContent = `Units: ${p2Warriors + p2Archers + p2Mages}`;
 }
 
 // Render the game board
@@ -366,6 +561,7 @@ function findUnitById(id) {
 
 // Set up event listeners
 function setupEventListeners() {
+  console.log("Setting up event listeners...");
   // Board click event
   gameBoard.addEventListener("click", handleBoardClick);
 
@@ -380,6 +576,24 @@ function setupEventListeners() {
   specialBtn.addEventListener("click", performSpecialAbility);
   newGameBtn.addEventListener("click", initGame);
 
+  // Save/Load buttons
+  const saveBtn = document.getElementById("saveGameBtn");
+  const loadBtn = document.getElementById("loadGameBtn");
+
+  if (saveBtn) {
+    console.log("Adding save button listener");
+    saveBtn.addEventListener("click", saveGameState);
+  } else {
+    console.error("Save button not found!");
+  }
+
+  if (loadBtn) {
+    console.log("Adding load button listener");
+    loadBtn.addEventListener("click", loadGameState);
+  } else {
+    console.error("Load button not found!");
+  }
+
   console.log("Event listeners set up");
 }
 
@@ -391,7 +605,7 @@ function handleBoardClick(event) {
   const x = parseInt(cell.dataset.x);
   const y = parseInt(cell.dataset.y);
 
-  if (gameState.currentPhase === "unitPlacement") {
+  if (gameState.currentPhase === "placement") {
     handleUnitPlacement(x, y);
   } else if (gameState.currentPhase === "movement") {
     handleMovementPhase(x, y);
@@ -402,18 +616,30 @@ function handleBoardClick(event) {
 
 // Handle unit placement phase
 function startPlacementPhase() {
-  turnIndicator.innerHTML = `<h3>Placement Phase: Player ${gameState.currentTurn}</h3>`;
+  gameState.currentPhase = "placement";
 
-  // Get the player's units that need to be placed
+  // Hide dice button and dice result during placement
+  const diceBtn = document.getElementById("rollDiceBtn");
+  if (diceBtn) diceBtn.style.display = "none";
+  if (diceResult) diceResult.style.display = "none";
+
+  // Show placement instructions in the turn indicator
+  turnIndicator.style.display = "block";
   const currentPlayerUnits =
     gameState.currentTurn === 1
       ? gameState.player1.units
       : gameState.player2.units;
-
-  // Count unplaced units
   const unplacedUnits = currentPlayerUnits.filter(
     (unit) => unit.position === null
   ).length;
+
+  turnIndicator.innerHTML = `
+    <div class="placement-info">
+      <p>Player ${gameState.currentTurn}: Place your units!</p>
+      <p>Remaining units to place: <strong>${unplacedUnits}</strong></p>
+      <p>Click on a cell in your zone to place a unit.</p>
+    </div>
+  `;
 
   if (unplacedUnits === 0) {
     // All units placed, move to next player or start game
@@ -422,19 +648,12 @@ function startPlacementPhase() {
       startPlacementPhase();
     } else {
       // Both players have placed all units, start the game proper
-      startGameRound();
+      setTimeout(() => {
+        startGameRound();
+      }, 600); // Small delay for smooth transition
     }
     return;
   }
-
-  // Show placement instructions
-  const placementInfo = document.createElement("div");
-  placementInfo.innerHTML = `
-        <p>Player ${gameState.currentTurn}, place your units!</p>
-        <p>Remaining units to place: ${unplacedUnits}</p>
-        <p>Click on a cell in your zone to place a unit.</p>
-    `;
-  turnIndicator.appendChild(placementInfo);
 }
 
 // Handle unit placement
@@ -476,35 +695,47 @@ function handleUnitPlacement(x, y) {
 
 // Start the game round - rolling dice to determine who goes first
 function startGameRound() {
-  console.log("---DEBUG: startGameRound() called---");
-
   gameState.currentPhase = "rollForTurn";
 
-  // Clear the turn indicator content first
+  // Show turn indicator
+  turnIndicator.style.display = "block";
   turnIndicator.innerHTML = `<h3>New Round - Roll for Turn Order</h3>`;
 
-  // Create a new button element and add it to the DOM
-  const newRollBtn = document.createElement("button");
-  newRollBtn.id = "rollDiceBtn";
-  newRollBtn.textContent = "Roll Dice";
-  newRollBtn.style.display = "block";
-  newRollBtn.style.margin = "10px auto";
+  // Ensure dice button exists and is visible inside turnIndicator
+  let diceBtn = document.getElementById("rollDiceBtn");
+  if (!diceBtn) {
+    diceBtn = document.createElement("button");
+    diceBtn.id = "rollDiceBtn";
+    diceBtn.className = "dice-btn";
+    diceBtn.innerHTML = '<span class="dice-icon">🎲</span> Roll Dice';
+    diceBtn.addEventListener("click", rollDiceForTurn);
+    turnIndicator.appendChild(diceBtn);
+  } else {
+    // Move the button into the turnIndicator if not already there
+    if (diceBtn.parentElement !== turnIndicator) {
+      turnIndicator.appendChild(diceBtn);
+    }
+    diceBtn.removeEventListener("click", rollDiceForTurn); // Prevent duplicate listeners
+    diceBtn.addEventListener("click", rollDiceForTurn);
+  }
+  diceBtn.style.display = "inline-flex";
+  diceBtn.disabled = false;
 
-  // Add the button to the turn indicator
-  turnIndicator.appendChild(newRollBtn);
-  turnIndicator.appendChild(diceResult);
-
-  // Add a fresh event listener to the new button
-  document
-    .getElementById("rollDiceBtn")
-    .addEventListener("click", rollDiceForTurn);
-
-  // Disable other buttons during this phase
-  endMovementBtn.disabled = true;
-  endActionBtn.disabled = true;
-  attackBtn.disabled = true;
-  defendBtn.disabled = true;
-  specialBtn.disabled = true;
+  // Ensure dice result exists and is visible
+  let diceResultDiv = document.getElementById("diceResult");
+  if (!diceResultDiv) {
+    diceResultDiv = document.createElement("div");
+    diceResultDiv.id = "diceResult";
+    diceResultDiv.className = "dice-result";
+    turnIndicator.appendChild(diceResultDiv);
+  } else {
+    // Move the result into the turnIndicator if not already there
+    if (diceResultDiv.parentElement !== turnIndicator) {
+      turnIndicator.appendChild(diceResultDiv);
+    }
+  }
+  diceResultDiv.style.display = "block";
+  diceResultDiv.innerHTML = "";
 }
 
 // Roll dice to determine turn order
@@ -516,31 +747,58 @@ function rollDiceForTurn() {
     return;
   }
 
-  const p1Roll = Math.floor(Math.random() * 6) + 1;
-  const p2Roll = Math.floor(Math.random() * 6) + 1;
+  // Always get the current dice result element
+  const diceResultDiv = document.getElementById("diceResult");
+  if (!diceResultDiv) return;
 
-  // Animate dice roll
-  diceResult.classList.add("rolling");
-
-  // Disable the button during animation
+  // Show loader/spinner and let the browser render it
+  diceResultDiv.classList.remove("rolling");
+  diceResultDiv.innerHTML = `<div class='dice-loader'><span class='dice-spinner'></span> Rolling dice...</div>`;
   document.getElementById("rollDiceBtn").disabled = true;
 
+  // Let the browser render the loader before starting the real timer
   setTimeout(() => {
-    diceResult.classList.remove("rolling");
-    diceResult.textContent = `Player 1 rolled: ${p1Roll}, Player 2 rolled: ${p2Roll}`;
+    // Now start the real 1 second timer for the dice roll
+    setTimeout(() => {
+      const p1Roll = Math.floor(Math.random() * 6) + 1;
+      const p2Roll = Math.floor(Math.random() * 6) + 1;
 
-    if (p1Roll > p2Roll) {
-      gameState.currentTurn = 1;
-      setTimeout(() => startMovementPhase(), 1500);
-    } else if (p2Roll > p1Roll) {
-      gameState.currentTurn = 2;
-      setTimeout(() => startMovementPhase(), 1500);
-    } else {
-      // Tie, roll again
-      diceResult.textContent += " (Tie! Roll again)";
-      document.getElementById("rollDiceBtn").disabled = false;
-    }
-  }, 1000);
+      // Build creative dice result HTML
+      let winnerMsg = "";
+      let winnerClass = "";
+      if (p1Roll > p2Roll) {
+        winnerMsg = `<span class='dice-winner'>Player 1 goes first!</span>`;
+        winnerClass = "p1-wins";
+        gameState.currentTurn = 1;
+        setTimeout(() => startMovementPhase(), 1800);
+      } else if (p2Roll > p1Roll) {
+        winnerMsg = `<span class='dice-winner'>Player 2 goes first!</span>`;
+        winnerClass = "p2-wins";
+        gameState.currentTurn = 2;
+        setTimeout(() => startMovementPhase(), 1800);
+      } else {
+        winnerMsg = `<span class='dice-tie'>It's a tie! Roll again.</span>`;
+        winnerClass = "tie";
+        document.getElementById("rollDiceBtn").disabled = false;
+      }
+
+      diceResultDiv.innerHTML = `
+        <div class='dice-result-modern ${winnerClass}'>
+          <div class='dice-row'>
+            <div class='dice-player'>
+              <div class='dice-label'>Player 1</div>
+              <div class='dice-face'>🎲 <span class='dice-num'>${p1Roll}</span></div>
+            </div>
+            <div class='dice-player'>
+              <div class='dice-label'>Player 2</div>
+              <div class='dice-face'>🎲 <span class='dice-num'>${p2Roll}</span></div>
+            </div>
+          </div>
+          <div class='dice-turn-msg'>${winnerMsg}</div>
+        </div>
+      `;
+    }, 1000);
+  }, 50); // Let the loader render first
 }
 
 // Start the movement phase
@@ -1103,6 +1361,12 @@ function endGame(winningPlayer) {
 
 // End action phase
 function endActionPhase() {
+  // Disable the end action button and other action buttons immediately
+  endActionBtn.disabled = true;
+  attackBtn.disabled = true;
+  defendBtn.disabled = true;
+  specialBtn.disabled = true;
+
   // Reset any buffs that last only one turn
   resetTurnBuffs();
 
@@ -1148,6 +1412,34 @@ function updateGameInfo() {
   } else {
     movementPhase.classList.remove("active-phase");
     actionPhase.classList.remove("active-phase");
+  }
+
+  // Update player-status indicator
+  const p1Status = document.querySelector("#player1Info .player-status");
+  const p2Status = document.querySelector("#player2Info .player-status");
+  if (p1Status)
+    p1Status.classList.toggle("active", gameState.currentTurn === 1);
+  if (p2Status)
+    p2Status.classList.toggle("active", gameState.currentTurn === 2);
+
+  // Update save/load button states
+  updateSaveLoadButtons();
+}
+
+// Update save/load button states
+function updateSaveLoadButtons() {
+  const saveBtn = document.getElementById("saveGameBtn");
+  const loadBtn = document.getElementById("loadGameBtn");
+
+  if (saveBtn) {
+    // Always enable save button except during setup
+    saveBtn.disabled = gameState.currentPhase === "setup";
+  }
+
+  if (loadBtn) {
+    // Enable load button if there's a saved game
+    const hasSavedGame = localStorage.getItem("warOfClansGame") !== null;
+    loadBtn.disabled = !hasSavedGame;
   }
 }
 
