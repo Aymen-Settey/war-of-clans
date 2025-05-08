@@ -101,6 +101,9 @@ const saveGameBtn = document.getElementById("saveGameBtn");
 const loadGameBtn = document.getElementById("loadGameBtn");
 const winner = document.getElementById("winner");
 
+// Cooldown timer interval for selected Mage
+let mageCooldownInterval = null;
+
 // Save game state to local storage
 function saveGameState() {
   console.log("Attempting to save game state...");
@@ -527,6 +530,33 @@ function renderBoard() {
             }
 
             unitElement.appendChild(healthBar);
+
+            // --- Mage cooldown badge on board ---
+            if (unit.type === "mage") {
+              const now = Date.now();
+              let badge = document.createElement("span");
+              badge.className = "mage-cooldown-badge";
+              badge.style.position = "absolute";
+              badge.style.top = "2px";
+              badge.style.right = "2px";
+              badge.style.pointerEvents = "none";
+              if (
+                unit.lastSpecialUsed &&
+                now - unit.lastSpecialUsed < 2 * 60 * 1000
+              ) {
+                const remaining = Math.ceil(
+                  (2 * 60 * 1000 - (now - unit.lastSpecialUsed)) / 1000
+                );
+                badge.innerHTML =
+                  '<span class="cooldown-icon">⏳</span>' + remaining + "s";
+              } else {
+                badge.innerHTML = '<span class="cooldown-icon">🔥</span>Ready!';
+                badge.style.background = "#27ae60";
+              }
+              unitElement.appendChild(badge);
+            }
+            // --- End Mage cooldown badge ---
+
             cell.appendChild(unitElement);
           }
         });
@@ -958,17 +988,97 @@ function isCellValidMove(x, y) {
 
 // Update selected unit info display
 function updateSelectedUnitInfo(unit) {
-  if (!unit) {
-    selectedUnitInfo.textContent = "No unit selected";
+  const infoDiv = document.getElementById("selectedUnitInfo");
+  const typeDiv = infoDiv.querySelector(".unit-type");
+  const statsDiv = infoDiv.querySelector(".unit-stats");
+  const cooldownDiv = document.getElementById("specialCooldownInfo");
+
+  // Debug log
+  console.log("updateSelectedUnitInfo called with:", unit);
+
+  // Clear previous cooldown timer
+  if (mageCooldownInterval) {
+    clearInterval(mageCooldownInterval);
+    mageCooldownInterval = null;
+  }
+
+  // Fallback: if any of the divs are missing, update the whole panel as before
+  if (!typeDiv || !statsDiv || !cooldownDiv) {
+    console.warn(
+      "Fallback: .unit-type, .unit-stats, or #specialCooldownInfo not found"
+    );
+    if (!unit) {
+      infoDiv.innerHTML = "No unit selected";
+      return;
+    }
+    let html = `<p><strong>${unit.name}</strong> (Player ${unit.player})</p>`;
+    html += `<p>Health: ${unit.health}/${unitTypes[unit.type].health}</p>`;
+    html += `<p>Attack: ${unit.attack}, Defense: ${unit.defense}</p>`;
+    html += `<p>Range: ${unit.range}, Move Range: ${unit.moveRange}</p>`;
+    if (unit.type === "mage") {
+      const now = Date.now();
+      if (unit.lastSpecialUsed && now - unit.lastSpecialUsed < 2 * 60 * 1000) {
+        const remaining = Math.ceil(
+          (2 * 60 * 1000 - (now - unit.lastSpecialUsed)) / 1000
+        );
+        html += `<span class="mage-cooldown-badge"><span class="cooldown-icon">⏳</span>${remaining}s</span>`;
+      } else {
+        html += `<span class="mage-cooldown-badge" style="background:#27ae60"><span class="cooldown-icon">🔥</span>Ready!</span>`;
+      }
+    }
+    infoDiv.innerHTML = html;
     return;
   }
 
-  selectedUnitInfo.innerHTML = `
-        <p><strong>${unit.name}</strong> (Player ${unit.player})</p>
-        <p>Health: ${unit.health}/${unitTypes[unit.type].health}</p>
-        <p>Attack: ${unit.attack}, Defense: ${unit.defense}</p>
-        <p>Range: ${unit.range}, Move Range: ${unit.moveRange}</p>
-    `;
+  if (!unit) {
+    typeDiv.textContent = "No unit selected";
+    statsDiv.textContent = "";
+    cooldownDiv.innerHTML = "";
+    return;
+  }
+
+  typeDiv.innerHTML = `<strong>${unit.name}</strong> (Player ${unit.player})`;
+  statsDiv.innerHTML = `
+    Health: ${unit.health}/${unitTypes[unit.type].health}<br>
+    Attack: ${unit.attack}, Defense: ${unit.defense}<br>
+    Range: ${unit.range}, Move Range: ${unit.moveRange}
+  `;
+
+  // Mage cooldown badge
+  if (unit.type === "mage") {
+    function renderMageCooldown() {
+      const now = Date.now();
+      let badge = "";
+      if (unit.lastSpecialUsed && now - unit.lastSpecialUsed < 2 * 60 * 1000) {
+        const remaining = Math.ceil(
+          (2 * 60 * 1000 - (now - unit.lastSpecialUsed)) / 1000
+        );
+        badge = `<span class="mage-cooldown-badge"><span class="cooldown-icon">⏳</span>${remaining}s</span>`;
+      } else {
+        badge = `<span class="mage-cooldown-badge" style="background:#27ae60"><span class="cooldown-icon">🔥</span>Ready!</span>`;
+      }
+      cooldownDiv.innerHTML = badge;
+    }
+    renderMageCooldown();
+    // If on cooldown, update every second
+    if (
+      unit.lastSpecialUsed &&
+      Date.now() - unit.lastSpecialUsed < 2 * 60 * 1000
+    ) {
+      mageCooldownInterval = setInterval(() => {
+        renderMageCooldown();
+        if (
+          !unit.lastSpecialUsed ||
+          Date.now() - unit.lastSpecialUsed >= 2 * 60 * 1000
+        ) {
+          clearInterval(mageCooldownInterval);
+          mageCooldownInterval = null;
+        }
+      }, 1000);
+    }
+  } else {
+    cooldownDiv.innerHTML = "";
+  }
 }
 
 // Reset selection highlights and state
@@ -1019,6 +1129,133 @@ function handleActionPhase(x, y) {
     alert(
       "You have already performed an action this turn. End the action phase."
     );
+    return;
+  }
+
+  // Archer Sniper Shot special
+  if (gameState.selectedUnit && gameState.actionType === "archerSniper") {
+    const archer = gameState.selectedUnit;
+    if (archer.specialUsed) {
+      alert("This Archer has already used their Sniper Shot!");
+      return;
+    }
+    // Find enemy units in the clicked cell
+    const enemyUnitIds = cell.units.filter((unitId) => {
+      const unit = findUnitById(unitId);
+      return unit && unit.player !== archer.player && unit.status === "active";
+    });
+    if (enemyUnitIds.length === 0) {
+      alert("No enemy units in this cell. Select a cell with an enemy unit.");
+      return;
+    }
+    // If more than one enemy, let the user pick (for now, just pick the first)
+    const targetUnit = findUnitById(enemyUnitIds[0]);
+    // Calculate damage
+    let attack = archer.attack;
+    if (archer.attackBuff) {
+      attack += 5;
+      archer.attackBuff = false;
+    }
+    // Apply clan bonus
+    if (
+      archer.player === 1 &&
+      gameState.player1.clan === "plains" &&
+      archer.type === "archer"
+    ) {
+      attack += clanTypes.plains.rangedBonus;
+    } else if (
+      archer.player === 2 &&
+      gameState.player2.clan === "plains" &&
+      archer.type === "archer"
+    ) {
+      attack += clanTypes.plains.rangedBonus;
+    }
+    // Calculate defense
+    let defense = targetUnit.defense;
+    if (targetUnit.defendBuff) {
+      defense += 5;
+      targetUnit.defendBuff = false;
+    }
+    if (targetUnit.player === 1 && gameState.player1.clan === "mountain") {
+      defense += clanTypes.mountain.defenseBonus;
+    } else if (
+      targetUnit.player === 2 &&
+      gameState.player2.clan === "mountain"
+    ) {
+      defense += clanTypes.mountain.defenseBonus;
+    }
+    // Final damage
+    const damage = Math.max(1, attack - defense);
+    targetUnit.health -= damage;
+    let defeated = false;
+    if (targetUnit.health <= 0) {
+      targetUnit.health = 0;
+      targetUnit.status = "defeated";
+      cell.units = cell.units.filter((id) => id !== targetUnit.id);
+      defeated = true;
+    }
+    archer.specialUsed = true;
+    let msg = `Sniper Shot! Archer hit ${targetUnit.name} for ${damage} damage.`;
+    if (defeated) msg += `\n${targetUnit.name} was defeated!`;
+    alert(msg);
+    // End action
+    gameState.actionExecuted = true;
+    gameState.actionType = null;
+    resetSelections();
+    renderBoard();
+    updateUnitCounts();
+    attackBtn.disabled = true;
+    defendBtn.disabled = true;
+    specialBtn.disabled = true;
+    return;
+  }
+
+  // Mage row burn special
+  if (gameState.selectedUnit && gameState.actionType === "mageRowBurn") {
+    const mage = gameState.selectedUnit;
+    const targetRow = y;
+    let affected = [];
+    let defeated = [];
+    for (let i = 0; i < 10; i++) {
+      const rowCell = gameState.board[i][targetRow];
+      rowCell.units.slice().forEach((unitId) => {
+        const targetUnit = findUnitById(unitId);
+        if (
+          targetUnit &&
+          targetUnit.player !== mage.player &&
+          targetUnit.status === "active"
+        ) {
+          targetUnit.health -= 40;
+          affected.push(`${targetUnit.name} at (${i + 1}, ${targetRow + 1})`);
+          if (targetUnit.health <= 0) {
+            targetUnit.health = 0;
+            targetUnit.status = "defeated";
+            rowCell.units = rowCell.units.filter((id) => id !== targetUnit.id);
+            defeated.push(`${targetUnit.name} at (${i + 1}, ${targetRow + 1})`);
+          }
+        }
+      });
+    }
+    mage.lastSpecialUsed = getNow();
+    let msg = `Mage burned row ${targetRow + 1} for 40 damage!\n`;
+    if (affected.length > 0) {
+      msg += `Affected: ${affected.join(", ")}`;
+    } else {
+      msg += `No enemy units were hit.`;
+    }
+    if (defeated.length > 0) {
+      msg += `\nDefeated: ${defeated.join(", ")}`;
+    }
+    alert(msg);
+    // End action
+    gameState.actionExecuted = true;
+    gameState.actionType = null;
+    resetSelections();
+    renderBoard();
+    updateUnitCounts();
+    attackBtn.disabled = true;
+    defendBtn.disabled = true;
+    specialBtn.disabled = true;
     return;
   }
 
@@ -1157,40 +1394,48 @@ function performDefend() {
 function performSpecialAbility() {
   if (!gameState.selectedUnit || gameState.actionExecuted) return;
 
-  // Implement special abilities based on unit type
   const unit = gameState.selectedUnit;
 
   if (unit.type === "warrior") {
     // Warrior special: Battle Cry (boost attack)
     unit.attackBuff = true;
     alert("Warrior uses Battle Cry! Attack increased for this turn.");
+    gameState.actionExecuted = true;
+    resetSelections();
+    renderBoard();
+    attackBtn.disabled = true;
+    defendBtn.disabled = true;
+    specialBtn.disabled = true;
+    return;
   } else if (unit.type === "archer") {
-    // Archer special: Precise Shot (guaranteed hit)
-    gameState.actionType = "preciseShot";
-    alert("Archer readies a Precise Shot! Select a target (guaranteed hit).");
-    return; // Don't mark action as executed yet
-  } else if (unit.type === "mage") {
-    // Mage special: Area effect spell
-    gameState.actionType = "areaMagic";
+    // Archer special: Sniper Shot (anywhere, once per game)
+    if (unit.specialUsed) {
+      alert("This Archer has already used their Sniper Shot!");
+      return;
+    }
+    gameState.actionType = "archerSniper";
     alert(
-      "Mage prepares a magical storm! Select a target cell for area effect damage."
+      "Archer prepares a Sniper Shot! Click any enemy unit on the board to snipe."
     );
     return; // Don't mark action as executed yet
+  } else if (unit.type === "mage") {
+    // Mage special: Burn an entire row (40 damage, 2 min cooldown)
+    const now = getNow();
+    if (unit.lastSpecialUsed && now - unit.lastSpecialUsed < 2 * 60 * 1000) {
+      const remaining = Math.ceil(
+        (2 * 60 * 1000 - (now - unit.lastSpecialUsed)) / 1000
+      );
+      alert(
+        `This Mage's special is on cooldown. Try again in ${remaining} seconds.`
+      );
+      return;
+    }
+    gameState.actionType = "mageRowBurn";
+    alert(
+      "Mage prepares to burn a row! Click any cell in the row you want to target."
+    );
+    return;
   }
-
-  // Mark action as executed for non-targeting abilities
-  gameState.actionExecuted = true;
-
-  // Reset selections
-  resetSelections();
-
-  // Update UI
-  renderBoard();
-
-  // Disable action buttons
-  attackBtn.disabled = true;
-  defendBtn.disabled = true;
-  specialBtn.disabled = true;
 }
 
 // Execute attack on target
@@ -1481,5 +1726,19 @@ function updateSaveLoadButtons() {
   }
 }
 
+// Add a helper to get the current timestamp
+function getNow() {
+  return Date.now();
+}
+
 // Initialize the game when the page loads
 window.addEventListener("DOMContentLoaded", initGame);
+
+// Add this after DOMContentLoaded or in setupEventListeners
+window.addEventListener("DOMContentLoaded", () => {
+  // ... existing code ...
+  const gameOverNewGameBtn = document.getElementById("gameOverNewGameBtn");
+  if (gameOverNewGameBtn) {
+    gameOverNewGameBtn.addEventListener("click", initGame);
+  }
+});

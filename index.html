@@ -229,6 +229,7 @@
             <div class="unit-details">
               <div class="unit-type"></div>
               <div class="unit-stats"></div>
+              <div id="specialCooldownInfo"></div>
             </div>
           </div>
           <div class="action-buttons">
@@ -250,12 +251,15 @@
 
       <div class="game-over" id="gameOver" style="display: none">
         <div class="game-over-content">
-          <h2>Game Over</h2>
+          <div class="confetti">🎉🎊✨</div>
+          <h2><span class="trophy">🏆</span>Game Over</h2>
           <div id="winner" class="winner-announcement"></div>
-          <button id="newGameBtn" class="new-game-btn">New Game</button>
+          <button id="gameOverNewGameBtn" class="new-game-btn">New Game</button>
         </div>
       </div>
     </div>
+
+    <div id="modalContainer"></div>
 
     <script src="app.js"></script>
   </body>
