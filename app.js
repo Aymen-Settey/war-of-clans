@@ -1195,13 +1195,23 @@ function performSpecialAbility() {
 
 // Execute attack on target
 function attackTarget(x, y) {
-  const attackingUnit = gameState.selectedUnit;
-  const targetCell = gameState.board[x][y];
+  // Find all friendly units in the selected cell (group attack)
+  const selectedCell = gameState.selectedCell;
+  const cellUnits = gameState.board[selectedCell.x][selectedCell.y].units;
+  const friendlyUnits = cellUnits
+    .map(findUnitById)
+    .filter(
+      (unit) =>
+        unit &&
+        unit.player === gameState.currentTurn &&
+        unit.status === "active"
+    );
 
   // Get enemy units in the target cell
+  const targetCell = gameState.board[x][y];
   const enemyUnitIds = targetCell.units.filter((unitId) => {
     const unit = findUnitById(unitId);
-    return unit && unit.player !== attackingUnit.player;
+    return unit && unit.player !== gameState.currentTurn;
   });
 
   if (enemyUnitIds.length === 0) {
@@ -1209,62 +1219,16 @@ function attackTarget(x, y) {
     return;
   }
 
-  // Choose the first enemy unit as target
-  const targetUnitId = enemyUnitIds[0];
-  const targetUnit = findUnitById(targetUnitId);
-
-  // Roll for attack success
-  const attackRoll = Math.floor(Math.random() * 6) + 1;
-  const isHit = attackRoll >= 3 || gameState.actionType === "preciseShot";
-
-  if (isHit) {
-    // Calculate damage
-    let damage = attackingUnit.attack;
-
-    // Apply buffs
-    if (attackingUnit.attackBuff) {
-      damage += 5;
-      attackingUnit.attackBuff = false; // Remove buff after use
-    }
-
-    // Apply clan bonuses
-    if (
-      attackingUnit.player === 1 &&
-      gameState.player1.clan === "plains" &&
-      attackingUnit.type === "archer"
-    ) {
-      damage += clanTypes.plains.rangedBonus;
-    } else if (
-      attackingUnit.player === 2 &&
-      gameState.player2.clan === "plains" &&
-      attackingUnit.type === "archer"
-    ) {
-      damage += clanTypes.plains.rangedBonus;
-    }
-
-    if (
-      attackingUnit.player === 1 &&
-      gameState.player1.clan === "sage" &&
-      attackingUnit.type === "mage"
-    ) {
-      damage += clanTypes.sage.magicBonus;
-    } else if (
-      attackingUnit.player === 2 &&
-      gameState.player2.clan === "sage" &&
-      attackingUnit.type === "mage"
-    ) {
-      damage += clanTypes.sage.magicBonus;
-    }
-
-    // Calculate defense
+  // Group defense: sum defense of all enemy units
+  const enemyUnits = enemyUnitIds.map(findUnitById);
+  let totalDefense = 0;
+  enemyUnits.forEach((targetUnit) => {
     let defense = targetUnit.defense;
-
     // Apply defense buff if defending
     if (targetUnit.defendBuff) {
       defense += 5;
       targetUnit.defendBuff = false; // Remove buff after use
     }
-
     // Apply clan defense bonus
     if (targetUnit.player === 1 && gameState.player1.clan === "mountain") {
       defense += clanTypes.mountain.defenseBonus;
@@ -1274,51 +1238,125 @@ function attackTarget(x, y) {
     ) {
       defense += clanTypes.mountain.defenseBonus;
     }
+    totalDefense += defense;
+  });
 
-    // Calculate final damage
-    const finalDamage = Math.max(1, damage - defense);
+  // Group attack: sum attack of all friendly units in the selected cell
+  let totalAttack = 0;
+  friendlyUnits.forEach((unit) => {
+    let attack = unit.attack;
+    // Apply buffs
+    if (unit.attackBuff) {
+      attack += 5;
+      unit.attackBuff = false; // Remove buff after use
+    }
+    // Apply clan bonuses
+    if (
+      unit.player === 1 &&
+      gameState.player1.clan === "plains" &&
+      unit.type === "archer"
+    ) {
+      attack += clanTypes.plains.rangedBonus;
+    } else if (
+      unit.player === 2 &&
+      gameState.player2.clan === "plains" &&
+      unit.type === "archer"
+    ) {
+      attack += clanTypes.plains.rangedBonus;
+    }
+    if (
+      unit.player === 1 &&
+      gameState.player1.clan === "sage" &&
+      unit.type === "mage"
+    ) {
+      attack += clanTypes.sage.magicBonus;
+    } else if (
+      unit.player === 2 &&
+      gameState.player2.clan === "sage" &&
+      unit.type === "mage"
+    ) {
+      attack += clanTypes.sage.magicBonus;
+    }
+    totalAttack += attack;
+  });
 
-    // Apply damage
-    targetUnit.health -= finalDamage;
+  // Roll for attack success (one roll for the whole attack action)
+  const attackRoll = Math.floor(Math.random() * 6) + 1;
+  const isHit = attackRoll >= 3 || gameState.actionType === "preciseShot";
 
-    // Check if unit is defeated
+  if (!isHit) {
+    alert(`Attack roll: ${attackRoll} — The attack failed!`);
+    // Mark action as executed
+    gameState.actionExecuted = true;
+    // Reset action type
+    gameState.actionType = null;
+    // Reset selections
+    resetSelections();
+    // Update UI
+    renderBoard();
+    // Disable action buttons
+    attackBtn.disabled = true;
+    defendBtn.disabled = true;
+    specialBtn.disabled = true;
+    return;
+  }
+
+  // Calculate total damage (minimum 1)
+  const totalDamage = Math.max(1, totalAttack - totalDefense);
+  let defeatedUnits = [];
+
+  if (enemyUnits.length === 1) {
+    // Single enemy: apply full damage
+    const targetUnit = enemyUnits[0];
+    targetUnit.health -= totalDamage;
     if (targetUnit.health <= 0) {
       targetUnit.health = 0;
       targetUnit.status = "defeated";
-
-      // Remove the unit from the board
-      targetCell.units = targetCell.units.filter((id) => id !== targetUnitId);
-
-      alert(
-        `${attackingUnit.name} hit ${targetUnit.name} for ${finalDamage} damage and defeated it!`
-      );
-    } else {
-      alert(
-        `${attackingUnit.name} hit ${targetUnit.name} for ${finalDamage} damage!`
-      );
+      targetCell.units = targetCell.units.filter((id) => id !== targetUnit.id);
+      defeatedUnits.push(targetUnit.name);
     }
-
-    // Check for game over
-    checkGameOver();
-
-    // Update unit counts
-    updateUnitCounts();
   } else {
-    alert(`${attackingUnit.name}'s attack missed!`);
+    // Multiple enemies: split damage equally
+    const splitDamage = Math.floor(totalDamage / enemyUnits.length) || 1;
+    enemyUnits.forEach((targetUnit) => {
+      targetUnit.health -= splitDamage;
+      if (targetUnit.health <= 0) {
+        targetUnit.health = 0;
+        targetUnit.status = "defeated";
+        targetCell.units = targetCell.units.filter(
+          (id) => id !== targetUnit.id
+        );
+        defeatedUnits.push(targetUnit.name);
+      }
+    });
   }
+
+  // Alert message
+  let msg = `Attack roll: ${attackRoll} — Success!\nGroup attack! ${friendlyUnits.length} unit(s) attacked for `;
+  if (enemyUnits.length === 1) {
+    msg += `${totalDamage} damage!`;
+  } else {
+    const splitDamage = Math.floor(totalDamage / enemyUnits.length) || 1;
+    msg += `${splitDamage} damage each!`;
+  }
+  if (defeatedUnits.length > 0) {
+    msg += `\nDefeated: ${defeatedUnits.join(", ")}`;
+  }
+  alert(msg);
+
+  // Check for game over
+  checkGameOver();
+  // Update unit counts
+  updateUnitCounts();
 
   // Mark action as executed
   gameState.actionExecuted = true;
-
   // Reset action type
   gameState.actionType = null;
-
   // Reset selections
   resetSelections();
-
   // Update UI
   renderBoard();
-
   // Disable action buttons
   attackBtn.disabled = true;
   defendBtn.disabled = true;
